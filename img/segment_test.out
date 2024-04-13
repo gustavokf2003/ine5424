@@ -1,0 +1,31 @@
+
+
+
+
+This is EPOS!
+
+Setting up this machine as follows: 
+  Mode:         library
+  Processor:    1 x RV64 at 1000 MHz (BUS clock = 33 MHz)
+  Machine:      SiFive-U
+  Memory:       131072 KB [0x0000000080000000:0x0000000087ffffff]
+  User memory:  131047 KB [0x0000000080000000:0x0000000087ff9fff]
+  I/O space:    524288 KB [0x0000000000000000:0x000000001fffffff]
+  Node Id:      will get from the network!
+  Position:     will get from the network!
+
+Segment test
+My address space's page directory is located at 0x0000000000000000
+Creating two extra data segments:
+  extra segment 1 => 10000 bytes, done!
+  extra segment 2 => 100000 bytes, done!
+Attaching segments:
+  extra segment 1 => 0x00000000807fdd08 done!
+  extra segment 2 => 0x00000000807e5668 done!
+Clearing segments:  done!
+Detaching segments:  done!
+Deleting segments:  done!
+I'm done, bye!
+The last thread has exited!
+Rebooting the machine ...
+Machine::reboot()

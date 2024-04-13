@@ -1,0 +1,336 @@
+diff --git a/include/real-time.h b/include/real-time.h
+index 4f53875..2ed0874 100644
+--- a/include/real-time.h
++++ b/include/real-time.h
+@@ -64,7 +64,7 @@ public:
+     struct Configuration: public Thread::Configuration {
+         Configuration(const Microsecond & p, const Microsecond & d = SAME, const Microsecond & cap = UNKNOWN, const Microsecond & act = NOW, const unsigned int n = INFINITE, const State & s = READY, const Criterion & c = NORMAL, unsigned int ss = STACK_SIZE)
+         : Thread::Configuration(s, c, ss), period(p), deadline(d == SAME ? p : d), capacity(cap), activation(act), times(n) {}
+-
++        
+         Microsecond period;
+         Microsecond deadline;
+         Microsecond capacity;
+@@ -80,8 +80,11 @@ public:
+ 
+     template<typename ... Tn>
+     Periodic_Thread(const Configuration & conf, int (* entry)(Tn ...), Tn ... an)
+-    : Thread(Thread::Configuration(SUSPENDED, (conf.criterion != NORMAL) ? conf.criterion : Criterion(conf.period), conf.stack_size), entry, an ...),
++    : Thread(Thread::Configuration(SUSPENDED, (conf.criterion != NORMAL) ? conf.criterion : Criterion(conf.deadline, conf.period, conf.capacity), conf.stack_size), entry, an ...),
+       _semaphore(0), _handler(&_semaphore, this), _alarm(conf.period, &_handler, conf.times) {
++        //cout << "PERIOD " << conf.period;
++        //cout << "DEADLINE " << conf.deadline;
++        //cout << "CAPACITY " << conf.capacity;
+         if((conf.state == READY) || (conf.state == RUNNING)) {
+             _state = SUSPENDED;
+             resume();
+@@ -99,7 +102,7 @@ public:
+ 
+         if(t->_alarm.times())
+             t->_semaphore.p();
+-
++        
+         return t->_alarm.times();
+     }
+ 
+diff --git a/include/scheduler.h b/include/scheduler.h
+index 03e153a..f934d66 100644
+--- a/include/scheduler.h
++++ b/include/scheduler.h
+@@ -153,7 +153,11 @@ class Real_Time_Scheduler_Common: public Priority
+ protected:
+     Real_Time_Scheduler_Common(int p): Priority(p), _deadline(0), _period(0), _capacity(0) {} // aperiodic
+     Real_Time_Scheduler_Common(int i, const Microsecond & d, const Microsecond & p, const Microsecond & c)
+-    : Priority(i), _deadline(d), _period(p), _capacity(c) {}
++    : Priority(i), _deadline(d), _period(p), _capacity(c) {
++        //cout << "\nPeriod:" << p  << "\n";
++        //cout << "Deadline:" << d  << "\n";
++        //cout << "Capacity:" << c  << "\n";
++    }
+ 
+ public:
+     const Microsecond period() { return _period; }
+@@ -208,6 +212,20 @@ public:
+     void update();
+ };
+ 
++// LLF
++class LLF: public Real_Time_Scheduler_Common
++{
++public:
++    static const bool timed = true;
++    static const bool dynamic = true;
++    static const bool preemptive = true;
++
++public:
++    LLF(int p = APERIODIC): Real_Time_Scheduler_Common(p) {}
++    LLF(const Microsecond & d, const Microsecond & p = SAME, const Microsecond & c = UNKNOWN, unsigned int cpu = ANY);
++    void update();
++};
++
+ __END_SYS
+ 
+ #endif
+diff --git a/include/system/config.h b/include/system/config.h
+index 813192f..4d3368c 100644
+--- a/include/system/config.h
++++ b/include/system/config.h
+@@ -7,17 +7,17 @@
+ // ARCHITECTURE, MACHINE, AND APPLICATION SELECTION
+ // This section is generated automatically from makedefs by $EPOS/etc/makefile
+ //============================================================================
+-#define SMOD xxx
+-#define ARCH xxx
+-#define MACH xxx
+-#define MMOD xxx
+-#define NETW xxx
+-#define APPL xxx
+-#define __mode_xxx__
+-#define __arch_xxx__
+-#define __mach_xxx__
+-#define __mmod_xxx__
+-#define __netw_xxx__
++#define SMOD library
++#define ARCH rv64
++#define MACH riscv
++#define MMOD sifive_u
++#define NETW standalone
++#define APPL scheduler_edf_test
++#define __library__
++#define __rv64__
++#define __riscv__
++#define __sifive_u__
++#define __standalone__
+ 
+ //============================================================================
+ // NAMESPACES AND DEFINITIONS
+diff --git a/include/system/traits.h b/include/system/traits.h
+index 5994d04..75e13b2 100644
+--- a/include/system/traits.h
++++ b/include/system/traits.h
+@@ -109,6 +109,7 @@ class FCFS;
+ class RR;
+ class RM;
+ class DM;
++class LLF;
+ class EDF;
+ class GRR;
+ class Fixed_CPU;
+diff --git a/include/time.h b/include/time.h
+index d8ca05d..bf6a2ec 100644
+--- a/include/time.h
++++ b/include/time.h
+@@ -35,6 +35,7 @@ class Alarm
+     friend class Periodic_Thread;               // for ticks(), times(), and elapsed()
+     friend class FCFS;                          // for ticks() and elapsed()
+     friend class EDF;                           // for ticks() and elapsed()
++    friend class LLF;
+ 
+ private:
+     typedef Timer_Common::Tick Tick;
+diff --git a/makedefs b/makedefs
+index 266100e..a666b1b 100644
+--- a/makedefs
++++ b/makedefs
+@@ -189,7 +189,7 @@ endif
+ # Tools and flags to compile applications
+ ACC             = $(BIN)/eposcc $(MACH_CC_FLAGS) -c -ansi -O
+ ACCFLAGS        = $(MACH_CXX_FLAGS)
+-ALD             = $(BIN)/eposcc --$(SMOD) --no-warn-mismatch --no-warn-rwx-segments
++ALD             = $(BIN)/eposcc --$(SMOD) --no-warn-mismatch 
+ ALDFLAGS        = --gc-sections $(MACH_MAGIC)
+ 
+ # Tools and flags to compile the system
+@@ -208,7 +208,7 @@ DEBUGGER        = $(MACH_DEBUGGER)
+ EMULATOR        = $(MACH_EMULATOR)
+ FLASHER         = $(MACH_FLASHER)
+ LD              = $(PREFIX)ld
+-LDFLAGS         = $(MACH_LD_FLAGS) -nostdlib -L$(LIB) -Bstatic --no-warn-rwx-segments
++LDFLAGS         = $(MACH_LD_FLAGS) -nostdlib -L$(LIB) -Bstatic 
+ MKBI            = $(BIN)/eposmkbi $(if $(findstring s,$(word 1,$(MAKEFLAGS))),-s) $(EPOS)
+ OBJCOPY         = $(PREFIX)objcopy
+ OBJCOPYFLAGS    = -R .note -R .comment
+diff --git a/src/api/alarm.cc b/src/api/alarm.cc
+index d73c687..d10f0e8 100644
+--- a/src/api/alarm.cc
++++ b/src/api/alarm.cc
+@@ -6,7 +6,7 @@
+ #include <process.h>
+ 
+ __BEGIN_SYS
+-
++//OStream cout;
+ Alarm_Timer * Alarm::_timer;
+ volatile Alarm::Tick Alarm::_elapsed;
+ Alarm::Queue Alarm::_request;
+@@ -90,6 +90,8 @@ void Alarm::handler(IC::Interrupt_Id i)
+ 
+     _elapsed++;
+ 
++    //cout << _elapsed << "\n";
++
+     if(Traits<Alarm>::visible) {
+         Display display;
+         int lin, col;
+diff --git a/src/api/scheduler.cc b/src/api/scheduler.cc
+index 7e0167b..3d0243e 100644
+--- a/src/api/scheduler.cc
++++ b/src/api/scheduler.cc
+@@ -4,16 +4,40 @@
+ #include <time.h>
+ 
+ __BEGIN_SYS
++OStream cout;
+ 
+ // The following Scheduling Criteria depend on Alarm, which is not available at scheduler.h
+ template <typename ... Tn>
+ FCFS::FCFS(int p, Tn & ... an): Priority((p == IDLE) ? IDLE : Alarm::elapsed()) {}
+ 
+-EDF::EDF(const Microsecond & d, const Microsecond & p, const Microsecond & c, unsigned int): Real_Time_Scheduler_Common(Alarm::ticks(d), Alarm::ticks(d), p, c) {}
++EDF::EDF(const Microsecond & d, const Microsecond & p, const Microsecond & c, unsigned int): Real_Time_Scheduler_Common(Alarm::ticks(d), Alarm::ticks(d), Alarm::ticks(p), Alarm::ticks(c)) {
++    cout << "\nPeriod:" << p  << "\n";
++    cout << "Deadline:" << d  << "\n";
++    cout << "Capacity:" << c  << "\n";
++}
+ 
+ void EDF::update() {
+     if((_priority >= PERIODIC) && (_priority < APERIODIC))
+         _priority = Alarm::elapsed() + _deadline;
++    
++    cout << "\nPeriod:" << _period  << "\n";
++    cout << "Deadline:" << _deadline  << "\n";
++    cout << "Capacity:" << _capacity  << "\n";
++    cout << Alarm::elapsed();
++}
++
++
++LLF::LLF(const Microsecond & d, const Microsecond & p, const Microsecond & c, unsigned int): Real_Time_Scheduler_Common(Alarm::ticks(d-c), Alarm::ticks(d), Alarm::ticks(p), Alarm::ticks(c)) {}
++ 
++void LLF::update(){
++    auto al = Alarm::elapsed();
++    if((_priority >= PERIODIC) && (_priority < APERIODIC))
++        _priority = _deadline - al % _period - _capacity;
++        
++    //cout << "\nPeriod:" << _period  << "\n";
++    //cout << "Deadline:" << _deadline  << "\n";
++    //cout << "Capacity:" << _capacity  << "\n";
++    //cout << al;
+ }
+ 
+ // Since the definition of FCFS above is only known to this unit, forcing its instantiation here so it gets emitted in scheduler.o for subsequent linking with other units is necessary.
+diff --git a/tests/scheduler_edf_test/scheduler_edf_test.cc b/tests/scheduler_edf_test/scheduler_edf_test.cc
+index 56fd387..98e9475 100644
+--- a/tests/scheduler_edf_test/scheduler_edf_test.cc
++++ b/tests/scheduler_edf_test/scheduler_edf_test.cc
+@@ -5,13 +5,19 @@
+ 
+ using namespace EPOS;
+ 
+-const unsigned int iterations = 100;
+-const unsigned int period_a = 100; // ms
+-const unsigned int period_b = 80; // ms
+-const unsigned int period_c = 60; // ms
+-const unsigned int wcet_a = 50; // ms
+-const unsigned int wcet_b = 20; // ms
+-const unsigned int wcet_c = 10; // ms
++const unsigned int iterations = 10;
++const unsigned int period_a = 20; // ms
++const unsigned int period_b = 5; // ms
++const unsigned int period_c = 10; // ms
++const unsigned int deadline_a = 7; // ms
++const unsigned int deadline_b = 4; // ms
++const unsigned int deadline_c = 8; // ms
++const unsigned int cap_a = 3; // ms
++const unsigned int cap_b = 2; // ms
++const unsigned int cap_c = 2; // ms
++const unsigned int wcet_a = 3; // ms
++const unsigned int wcet_b = 2; // ms
++const unsigned int wcet_c = 2; // ms
+ 
+ int func_a();
+ int func_b();
+@@ -28,13 +34,14 @@ inline void exec(char c, unsigned int time = 0) // in miliseconds
+ {
+     // Delay was not used here to prevent scheduling interference due to blocking
+     Microsecond elapsed = chrono.read() / 1000;
+-
++ 
+     cout << "\n" << elapsed << "\t" << c
+          << "\t[p(A)=" << thread_a->priority()
+          << ", p(B)=" << thread_b->priority()
+          << ", p(C)=" << thread_c->priority() << "]";
+ 
+     if(time) {
++
+         for(Microsecond end = elapsed + time, last = end; end > elapsed; elapsed = chrono.read() / 1000)
+             if(last != elapsed) {
+                 cout << "\n" << elapsed << "\t" << c
+@@ -43,6 +50,22 @@ inline void exec(char c, unsigned int time = 0) // in miliseconds
+                     << ", p(C)=" << thread_c->priority() << "]";
+                 last = elapsed;
+             }
++        cout << "\n" << elapsed << "\t" << c
++                    << "\t[p(A)=" << thread_a->priority()
++                    << ", p(B)=" << thread_b->priority()
++                    << ", p(C)=" << thread_c->priority() << "]";
++
++        /*elapsed = chrono.read() / 1000;
++        while (time > 0) {
++            if ((chrono.read() / 1000) - elapsed > 0) {
++                time = time - 1;
++                elapsed = chrono.read() / 1000;
++                cout << "\n" << elapsed << "\t" << c
++                    << "\t[p(A)=" << thread_a->priority()
++                    << ", p(B)=" << thread_b->priority()
++                    << ", p(C)=" << thread_c->priority() << "]";
++            }
++        }*/
+     }
+ }
+ 
+@@ -59,12 +82,12 @@ int main()
+     cout << "Threads will now be created and I'll wait for them to finish..." << endl;
+ 
+     // p,d,c,act,t
+-    thread_a = new Periodic_Thread(RTConf(period_a * 1000, 0, 0, 0, iterations), &func_a);
+-    thread_b = new Periodic_Thread(RTConf(period_b * 1000, 0, 0, 0, iterations), &func_b);
+-    thread_c = new Periodic_Thread(RTConf(period_c * 1000, 0, 0, 0, iterations), &func_c);
+-
++    thread_a = new Periodic_Thread(RTConf(period_a * 1000, period_a * 1000, cap_a * 1000, 0, iterations), &func_a);
++    thread_b = new Periodic_Thread(RTConf(period_b * 1000, period_b * 1000, cap_b * 1000, 0, iterations), &func_b);
++    thread_c = new Periodic_Thread(RTConf(period_c * 1000, period_c * 1000, cap_c * 1000, 0, iterations), &func_c);
++    
+     exec('M');
+-
++    
+     chrono.start();
+ 
+     int status_a = thread_a->join();
+diff --git a/tests/scheduler_edf_test/scheduler_edf_test_traits.h b/tests/scheduler_edf_test/scheduler_edf_test_traits.h
+index 5c1d255..0cf90b0 100644
+--- a/tests/scheduler_edf_test/scheduler_edf_test_traits.h
++++ b/tests/scheduler_edf_test/scheduler_edf_test_traits.h
+@@ -116,8 +116,8 @@ template<> struct Traits<Thread>: public Traits<Build>
+     static const bool trace_idle = hysterically_debugged;
+     static const bool simulate_capacity = false;
+ 
+-    typedef EDF Criterion;
+-    static const unsigned int QUANTUM = 10000; // us
++    typedef LLF Criterion;
++    static const unsigned int QUANTUM = 1000; // us
+ };
+ 
+ template<> struct Traits<Scheduler<Thread>>: public Traits<Build>
+diff --git a/tools/eposcc/eposcc b/tools/eposcc/eposcc
+index 0bc0f5c..8fb9ac3 100644
+--- a/tools/eposcc/eposcc
++++ b/tools/eposcc/eposcc
+@@ -20,7 +20,7 @@ DOC=$EPOS/doc
+ #=========================================================================
+ # CONFIGURATION
+ #=========================================================================
+-source $ETC/eposcc.cfg
++. $ETC/eposcc.cfg
+ 
+ #=========================================================================
+ # CUSTOMIZABLE DEFINITIONS
